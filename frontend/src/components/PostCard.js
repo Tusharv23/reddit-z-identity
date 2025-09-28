@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
-import { motion } from 'framer-motion';
+import { motion, AnimatePresence } from 'framer-motion';
 import { FiCopy, FiCheck, FiMessageCircle, FiUser, FiCalendar, FiExternalLink } from 'react-icons/fi';
+import CommentSkeletonCard from './CommentSkeletonCard';
+import { CommentCardLoader } from './CommentCardsLoader';
 
 const CommentSuggestionCard = ({ suggestion, index }) => {
   const [copied, setCopied] = useState(false);
@@ -82,7 +84,7 @@ const CommentSuggestionCard = ({ suggestion, index }) => {
   );
 };
 
-const PostCard = ({ postData, index }) => {
+const PostCard = ({ postData, index, isLoadingComments, isCurrentlyLoading }) => {
   const { post, comment_suggestions } = postData;
   
   const formatDate = (dateString) => {
@@ -168,18 +170,62 @@ const PostCard = ({ postData, index }) => {
 
       {/* Comment Suggestions */}
       <div className="border-t border-white/10 pt-4">
-        <h3 className="text-lg font-cyber text-reddit-blue mb-4 flex items-center">
-          <span className="mr-2">🤖</span>
+        <motion.h3 
+          className="text-lg font-cyber text-reddit-blue mb-4 flex items-center"
+          initial={{ opacity: 0.5 }}
+          animate={{ opacity: isCurrentlyLoading ? 1 : 0.8 }}
+          transition={{ duration: 0.3 }}
+        >
+          <motion.span 
+            className="mr-2"
+            animate={{ rotate: isCurrentlyLoading ? 360 : 0 }}
+            transition={{ duration: 2, repeat: isCurrentlyLoading ? Infinity : 0 }}
+          >
+            🤖
+          </motion.span>
           AI Comment Suggestions
-        </h3>
+          {isCurrentlyLoading && (
+            <motion.span 
+              className="ml-2 text-reddit-orange text-sm"
+              animate={{ opacity: [0.5, 1, 0.5] }}
+              transition={{ duration: 1, repeat: Infinity }}
+            >
+              Generating...
+            </motion.span>
+          )}
+        </motion.h3>
+        
         <div className="grid gap-4 md:grid-cols-1 lg:grid-cols-3">
-          {comment_suggestions.map((suggestion, idx) => (
-            <CommentSuggestionCard 
-              key={idx} 
-              suggestion={suggestion} 
-              index={idx}
-            />
-          ))}
+          <AnimatePresence mode="wait">
+            {comment_suggestions.length === 0 ? (
+              // Show comment card loaders
+              [...Array(3)].map((_, idx) => (
+                <CommentCardLoader key={`loader-${idx}`} index={idx} />
+              ))
+            ) : (
+              // Show actual comment suggestions with staggered animation
+              comment_suggestions.map((suggestion, idx) => (
+                <motion.div
+                  key={`comment-${idx}`}
+                  initial={{ opacity: 0, scale: 0.8, y: 20 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.8, y: -20 }}
+                  transition={{ 
+                    delay: idx * 0.2, 
+                    duration: 0.5,
+                    type: "spring",
+                    stiffness: 300,
+                    damping: 25
+                  }}
+                >
+                  <CommentSuggestionCard 
+                    suggestion={suggestion} 
+                    index={0} // Reset index since we're handling animation here
+                  />
+                </motion.div>
+              ))
+            )}
+          </AnimatePresence>
         </div>
       </div>
     </motion.div>

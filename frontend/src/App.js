@@ -4,13 +4,17 @@ import Header from './components/Header';
 import SearchBar from './components/SearchBar';
 import PostCard from './components/PostCard';
 import LoadingSpinner from './components/LoadingSpinner';
+import CommentCardsLoader from './components/CommentCardsLoader';
 import ErrorMessage from './components/ErrorMessage';
 import { redditApi } from './services/api';
 import './index.css';
 
 function App() {
   const [posts, setPosts] = useState([]);
+  const [postsWithComments, setPostsWithComments] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [loadingComments, setLoadingComments] = useState(false);
+  const [commentsLoadingIndex, setCommentsLoadingIndex] = useState(-1);
   const [error, setError] = useState(null);
   const [searchHistory, setSearchHistory] = useState([]);
 
@@ -29,25 +33,74 @@ function App() {
     localStorage.setItem('reddit-search-history', JSON.stringify(newHistory));
   };
 
+  const loadCommentsSequentially = async (postsData) => {
+    setLoadingComments(true);
+    
+    // Generate comments for all posts at once
+    try {
+      const postsWithComments = await redditApi.generateCommentsForPosts(postsData);
+      
+      // Now animate them loading one by one
+      for (let i = 0; i < postsWithComments.length; i++) {
+        setCommentsLoadingIndex(i);
+        
+        // Animation delay for smooth sequential loading
+        await new Promise(resolve => setTimeout(resolve, 600));
+        
+        // Update the specific post with its comments
+        setPosts(prevPosts => 
+          prevPosts.map((post, index) => 
+            index === i 
+              ? { ...post, comment_suggestions: postsWithComments[i].comment_suggestions }
+              : post
+          )
+        );
+      }
+    } catch (error) {
+      console.error('Error loading comments:', error);
+      setError('Failed to generate comment suggestions. Please try again.');
+    }
+    
+    setLoadingComments(false);
+    setCommentsLoadingIndex(-1);
+  };
+
   const handleSearch = async ({ subreddit, mode, limit }) => {
     setLoading(true);
     setError(null);
     setPosts([]);
+    setPostsWithComments([]);
+    setLoadingComments(false);
+    setCommentsLoadingIndex(-1);
 
     try {
-      let result;
+      let postsOnly;
       
       if (mode === 'single') {
-        result = await redditApi.getPostsWithComments(subreddit, limit);
+        // First, fetch posts only (fast)
+        postsOnly = await redditApi.getPostsOnly(subreddit, limit);
         saveToHistory(subreddit);
       } else {
-        // Multiple subreddits mode
+        // Multiple subreddits mode - for now use the old method
         const subreddits = subreddit.split(',').map(s => s.trim()).filter(s => s.length > 0);
-        result = await redditApi.getPostsFromMultipleSubreddits(subreddits, Math.ceil(limit / subreddits.length));
+        const result = await redditApi.getPostsFromMultipleSubreddits(subreddits, Math.ceil(limit / subreddits.length));
+        postsOnly = result.map(item => item.post);
         saveToHistory(subreddits.join(', '));
       }
 
-      setPosts(result);
+      // Show posts without comments first
+      const postsWithEmptyComments = postsOnly.map(post => ({
+        post: post,
+        comment_suggestions: [] // Empty comments initially
+      }));
+      
+      setPosts(postsWithEmptyComments);
+      setLoading(false);
+      
+      // Start loading comments after posts are displayed
+      setTimeout(() => {
+        loadCommentsSequentially(postsOnly);
+      }, 800);
       
       // Scroll to results
       setTimeout(() => {
@@ -60,8 +113,9 @@ function App() {
     } catch (err) {
       console.error('Search error:', err);
       setError(err.message || 'Failed to fetch posts. Please try again.');
-    } finally {
       setLoading(false);
+      setLoadingComments(false);
+      setCommentsLoadingIndex(-1);
     }
   };
 
@@ -97,7 +151,7 @@ function App() {
                   exit={{ opacity: 0 }}
                   transition={{ duration: 0.3 }}
                 >
-                  <LoadingSpinner message="Fetching posts and generating AI comments..." />
+                  <LoadingSpinner message="Fetching hot posts from Reddit..." />
                 </motion.div>
               )}
 
@@ -132,7 +186,10 @@ function App() {
                       <span className="text-reddit-orange">{posts.length}</span> Posts Found
                     </h2>
                     <p className="text-gray-400">
-                      Each post comes with AI-generated comment suggestions in different tones
+                      {loadingComments 
+                        ? "AI is generating personalized comment suggestions..." 
+                        : "Each post comes with AI-generated comment suggestions in different tones"
+                      }
                     </p>
                   </motion.div>
 
@@ -143,9 +200,46 @@ function App() {
                         key={`${postData.post.id}-${index}`} 
                         postData={postData} 
                         index={index}
+                        isLoadingComments={loadingComments}
+                        isCurrentlyLoading={commentsLoadingIndex === index}
                       />
                     ))}
                   </div>
+
+                  {/* Loading Comments Progress */}
+                  {loadingComments && (
+                    <motion.div
+                      className="mt-8"
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -20 }}
+                    >
+                      <CommentCardsLoader 
+                        message={`Generating AI comments for post ${commentsLoadingIndex + 1} of ${posts.length}`}
+                      />
+                      
+                      {/* Progress dots */}
+                      <div className="flex justify-center space-x-2 mt-4">
+                        {posts.map((_, index) => (
+                          <motion.div
+                            key={index}
+                            className={`w-3 h-3 rounded-full ${
+                              index < commentsLoadingIndex 
+                                ? 'bg-green-500' 
+                                : index === commentsLoadingIndex 
+                                ? 'bg-reddit-orange' 
+                                : 'bg-gray-600'
+                            }`}
+                            animate={index === commentsLoadingIndex ? {
+                              scale: [1, 1.3, 1],
+                              opacity: [0.7, 1, 0.7]
+                            } : {}}
+                            transition={{ duration: 0.8, repeat: Infinity }}
+                          />
+                        ))}
+                      </div>
+                    </motion.div>
+                  )}
 
                   {/* Load More Button (Future Feature) */}
                   <motion.div

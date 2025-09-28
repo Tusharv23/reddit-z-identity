@@ -15,7 +15,7 @@ class RedditService:
             user_agent=settings.REDDIT_USER_AGENT
         )
     
-    def fetch_hot_posts(self, subreddit_name: str, limit: int = 10) -> List[RedditPost]:
+    def fetch_hot_posts(self, subreddit_name: str, limit: int = 3) -> List[RedditPost]:
         """Fetch hot posts from a specific subreddit"""
         try:
             subreddit = self.reddit.subreddit(subreddit_name)

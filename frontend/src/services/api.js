@@ -60,6 +60,34 @@ export const redditApi = {
     }
   },
 
+  // Fetch posts only (no comments) for lazy loading
+  getPostsOnly: async (subreddit, limit = 10) => {
+    try {
+      const response = await api.get(`/posts/${subreddit}/posts-only`, {
+        params: { limit }
+      });
+      return response.data;
+    } catch (error) {
+      throw new Error(
+        error.response?.data?.detail || 
+        `Failed to fetch posts from r/${subreddit}`
+      );
+    }
+  },
+
+  // Generate comments for specific posts
+  generateCommentsForPosts: async (posts) => {
+    try {
+      const response = await api.post('/posts/generate-comments', posts);
+      return response.data;
+    } catch (error) {
+      throw new Error(
+        error.response?.data?.detail || 
+        'Failed to generate comments for posts'
+      );
+    }
+  },
+
   // Fetch posts from multiple subreddits
   getPostsFromMultipleSubreddits: async (subreddits, postsPerSubreddit = 3) => {
     try {

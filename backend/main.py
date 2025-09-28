@@ -53,10 +53,36 @@ async def root():
 async def health_check():
     return {"status": "healthy", "service": "reddit-auto-comments"}
 
+@app.get("/posts/{subreddit}/posts-only", response_model=List[RedditPost])
+async def get_posts_only(
+    subreddit: str,
+    limit: int = Query(default=10, ge=1, le=25, description="Number of posts to fetch")
+):
+    """Fetch hot posts from a subreddit without comment suggestions (for lazy loading)"""
+    try:
+        logger.info(f"Fetching {limit} posts only from r/{subreddit}")
+        
+        # Fetch posts from Reddit (no comments)
+        posts = await asyncio.get_event_loop().run_in_executor(
+            executor, reddit_service.fetch_hot_posts, subreddit, limit
+        )
+        
+        if not posts:
+            raise HTTPException(status_code=404, detail=f"No posts found in r/{subreddit}")
+        
+        logger.info(f"Successfully fetched {len(posts)} posts from r/{subreddit}")
+        return posts
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing request: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 @app.get("/posts/{subreddit}", response_model=List[PostWithComments])
 async def get_posts_with_comments(
     subreddit: str,
-    limit: int = Query(default=10, ge=1, le=25, description="Number of posts to fetch")
+    limit: int = Query(default=3, ge=1, le=25, description="Number of posts to fetch")
 ):
     """Fetch hot posts from a subreddit and generate comment suggestions"""
     try:
@@ -151,16 +177,36 @@ async def get_posts_from_multiple_subreddits(
         logger.error(f"Error processing multi-subreddit request: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
-@app.get("/posts/{subreddit}/{post_id}/comments", response_model=List[dict])
-async def generate_comments_for_post(subreddit: str, post_id: str):
-    """Generate comment suggestions for a specific post"""
+@app.post("/posts/generate-comments")
+async def generate_comments_for_posts(posts: List[RedditPost]):
+    """Generate comment suggestions for a list of posts"""
     try:
-        # This would require implementing a method to fetch a single post
-        # For now, return a simple response
-        return {"message": "Feature coming soon - generate comments for specific post"}
+        logger.info(f"Generating comments for {len(posts)} posts")
+        
+        # Generate comments for each post concurrently
+        tasks = []
+        for post in posts:
+            task = asyncio.get_event_loop().run_in_executor(
+                executor, bedrock_service.generate_comment_suggestions, post
+            )
+            tasks.append(task)
+        
+        # Wait for all comment generation tasks to complete
+        all_suggestions = await asyncio.gather(*tasks)
+        
+        # Combine posts with their comment suggestions
+        posts_with_comments = []
+        for post, suggestions in zip(posts, all_suggestions):
+            posts_with_comments.append(PostWithComments(
+                post=post,
+                comment_suggestions=suggestions
+            ))
+        
+        logger.info(f"Successfully generated comments for {len(posts_with_comments)} posts")
+        return posts_with_comments
         
     except Exception as e:
-        logger.error(f"Error generating comments for post {post_id}: {str(e)}")
+        logger.error(f"Error generating comments: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 if __name__ == "__main__":

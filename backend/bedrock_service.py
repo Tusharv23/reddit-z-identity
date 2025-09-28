@@ -40,7 +40,8 @@ class BedrockService:
             # Prepare the request body for Claude
             request_body = {
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 1000,
+                "max_tokens": 1500,  # Increased to prevent truncation
+                "temperature": 0.7,
                 "messages": [
                     {
                         "role": "user",
@@ -59,6 +60,9 @@ class BedrockService:
             # Parse the response
             response_body = json.loads(response['body'].read())
             response_text = response_body['content'][0]['text']
+            
+            # Log the response for debugging
+            logger.debug(f"Bedrock response for post {post.id}: {response_text[:300]}...")
             
             # Parse the structured response into CommentSuggestion objects
             suggestions = self._parse_comment_response(response_text)
@@ -97,8 +101,8 @@ Comments: {post.num_comments}
 
 Please generate 3 diverse comment suggestions with different tones:
 1. Supportive/Encouraging
-2. Analytical/Thoughtful  
-3. Humorous/Light-hearted
+2. Provoking/Very Strong Opninionated
+3. Humorous/Dark
 
 For each suggestion, provide:
 - The actual comment text (keep it concise, 1-3 sentences)
@@ -114,8 +118,8 @@ Format your response as JSON:
             "reasoning": "Why this comment works"
         }},
         {{
-            "comment": "Your analytical comment here", 
-            "tone": "Analytical",
+            "comment": "Your provoking comment here", 
+            "tone": "provoking",
             "reasoning": "Why this comment works"
         }},
         {{
@@ -130,37 +134,104 @@ Make sure comments are:
 - Relevant to the post content
 - Appropriate for the subreddit
 - Engaging and likely to get upvotes
-- Not offensive or controversial
-- Natural and human-like
+- offensive or controversial
+- human-like and texting style 
 """
     
     def _parse_comment_response(self, response_text: str) -> List[CommentSuggestion]:
         """Parse the AI response into CommentSuggestion objects"""
         try:
-            # Extract JSON from the response
+            # Log the raw response for debugging (truncated for logs)
+            logger.debug(f"Raw AI response length: {len(response_text)} chars")
+            logger.debug(f"Raw AI response start: {response_text[:200]}...")
+            
+            # Clean the response text
+            response_text = response_text.strip()
+            
+            # Try to find JSON in the response
             start_idx = response_text.find('{')
             end_idx = response_text.rfind('}') + 1
             
             if start_idx == -1 or end_idx == 0:
+                logger.error(f"No JSON brackets found in response. Response was: {response_text[:300]}...")
                 raise ValueError("No JSON found in response")
             
             json_text = response_text[start_idx:end_idx]
+            
+            # Try to fix common JSON issues
+            json_text = self._fix_json_issues(json_text)
+            
+            logger.debug(f"Attempting to parse JSON of length: {len(json_text)} chars")
+            
+            # Parse the JSON
             parsed_response = json.loads(json_text)
             
-            suggestions = []
-            for suggestion_data in parsed_response.get('suggestions', []):
-                suggestion = CommentSuggestion(
-                    comment=suggestion_data.get('comment', ''),
-                    tone=suggestion_data.get('tone', 'Neutral'),
-                    reasoning=suggestion_data.get('reasoning', '')
-                )
-                suggestions.append(suggestion)
+            # Validate the structure
+            if 'suggestions' not in parsed_response:
+                logger.error(f"No 'suggestions' key found in parsed response: {parsed_response}")
+                raise ValueError("Invalid response structure")
             
+            suggestions = []
+            for i, suggestion_data in enumerate(parsed_response.get('suggestions', [])):
+                if not isinstance(suggestion_data, dict):
+                    logger.warning(f"Suggestion {i} is not a dict: {suggestion_data}")
+                    continue
+                    
+                suggestion = CommentSuggestion(
+                    comment=suggestion_data.get('comment', '').strip(),
+                    tone=suggestion_data.get('tone', 'Neutral').strip(),
+                    reasoning=suggestion_data.get('reasoning', '').strip()
+                )
+                
+                # Skip empty suggestions
+                if suggestion.comment:
+                    suggestions.append(suggestion)
+            
+            if not suggestions:
+                logger.error("No valid suggestions found in response")
+                raise ValueError("No valid suggestions found")
+            
+            logger.info(f"Successfully parsed {len(suggestions)} suggestions")
             return suggestions[:3]  # Ensure we only return 3 suggestions
             
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {str(e)}. Raw response: {response_text[:200]}...")
+            return self._get_fallback_suggestions()
         except Exception as e:
             logger.error(f"Error parsing comment response: {str(e)}")
+            logger.error(f"Response text: {response_text[:500]}...")
             return self._get_fallback_suggestions()
+    
+    def _fix_json_issues(self, json_text: str) -> str:
+        """Try to fix common JSON formatting issues"""
+        try:
+            # Remove any trailing incomplete text after the last }
+            last_brace = json_text.rfind('}')
+            if last_brace != -1:
+                json_text = json_text[:last_brace + 1]
+            
+            # Try to fix incomplete strings by finding unclosed quotes
+            # This is a simple fix for common truncation issues
+            if json_text.count('"') % 2 != 0:
+                # Add closing quote if odd number of quotes
+                json_text += '"'
+            
+            # Try to fix incomplete objects/arrays
+            open_braces = json_text.count('{')
+            close_braces = json_text.count('}')
+            if open_braces > close_braces:
+                json_text += '}' * (open_braces - close_braces)
+            
+            open_brackets = json_text.count('[')
+            close_brackets = json_text.count(']')
+            if open_brackets > close_brackets:
+                json_text += ']' * (open_brackets - close_brackets)
+            
+            return json_text
+            
+        except Exception as e:
+            logger.warning(f"Failed to fix JSON issues: {e}")
+            return json_text
     
     def _get_fallback_suggestions(self) -> List[CommentSuggestion]:
         """Return fallback suggestions when AI generation fails"""
